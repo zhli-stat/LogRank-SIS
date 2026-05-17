@@ -76,7 +76,8 @@ LogRank-SIS/
     │   └── Code/
     │       ├── LM-Log-rank.R              # Example 1: Linear model (Table 1)
     │       ├── GLM-Log-rank.R             # Example 2: Poisson regression (Table 2)
-    │       └── COX-Log-rank.R             # Example 3: Cox model (Table 3)
+    │       ├── COX-Log-rank.R             # Example 3: Cox model (Table 3)
+    │       └── Proportion-Tables.R        # Examples 1–3: proportion tables from intermediate results
     └── Outlier_Case/
         └── Code/
             └── Outlier_Case.R             # Sensitivity analysis (Table 4)
@@ -150,6 +151,11 @@ source("Simulation/Example1-3/Code/GLM-Log-rank.R")
 
 # Example 3: Cox proportional hazards -> reproduces Table 3
 source("Simulation/Example1-3/Code/COX-Log-rank.R")
+
+# Proportion tables for Examples 1–3
+# Requires intermediate outputs from the three simulation scripts above
+source("Simulation/Example1-3/Code/Proportion-Tables.R")
+# Saves: Simulation/Example1-3/Tables/Prop_Table_{LM,GLM,COX}.csv
 ```
 
 ### Sensitivity Analysis (Table 4)
