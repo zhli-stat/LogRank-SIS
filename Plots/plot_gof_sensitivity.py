@@ -1,9 +1,6 @@
-# Sensitivity of IC-Cox goodness-of-fit across submodel sizes (p = 8,000)
-# Data source: Table 10 (d = 50); d = 15, 30, 60 from additional computation
-# Methods shown use best-performing imputation strategy per baseline method
 import matplotlib.pyplot as plt
 import numpy as np
-    
+
 d_values = [15, 30, 50, 60]
 
 data = {
@@ -31,7 +28,7 @@ data = {
         'AIC': [806.480, 782.379, 785.909, 777.590],
         'BIC': [864.522, 894.835, 970.918, 995.247]
     },
-    'KS-Filter (M2)': {
+    'KF (M2)': {
         'LogLik': [-391.735, -363.075, -343.406, -329.948],
         'ChiSq': [69.885, 127.205, 166.544, 193.460],
         'AIC': [807.470, 782.150, 782.811, 773.895],
@@ -44,71 +41,113 @@ colors = {
     'ADD-SIS': '#4c72b0',
     'MV-SIS (M3)': '#55a868',
     'DC-SIS (M1)': '#dd8452',
-    'KS-Filter (M2)': '#8172b3'
+    'KF (M2)': '#8172b3'
 }
+
+linestyles = {
+    'Log-rank SIS': '-',
+    'ADD-SIS': '--',
+    'MV-SIS (M3)': '-.',
+    'DC-SIS (M1)': ':',
+    'KF (M2)': (0, (5, 2))
+}
+
 markers = {
     'Log-rank SIS': 'o',
     'ADD-SIS': 'v',
     'MV-SIS (M3)': '*',
     'DC-SIS (M1)': 's',
-    'KS-Filter (M2)': '^'
+    'KF (M2)': '^'
+}
+
+marker_sizes = {
+    'Log-rank SIS': 8,
+    'ADD-SIS': 7,
+    'MV-SIS (M3)': 11,
+    'DC-SIS (M1)': 7,
+    'KF (M2)': 7
 }
 
 metrics = ['LogLik', 'ChiSq', 'AIC', 'BIC']
-y_labels = ['Log-likelihood', 'Likelihood Ratio $\chi^2$', 'AIC', 'BIC']
+y_labels = [
+    r'Log-likelihood ($\uparrow$)',
+    r'$\chi^2$ Statistic ($\uparrow$)',
+    r'AIC ($\downarrow$)',
+    r'BIC ($\downarrow$)'
+]
+panel_labels = ['(a)', '(b)', '(c)', '(d)']
 
-plt.rcParams['font.family'] = 'sans-serif'
-plt.rcParams['font.sans-serif'] = ['Arial', 'Helvetica', 'DejaVu Sans']
-plt.rcParams['font.weight'] = 'bold'
-plt.rcParams['axes.labelweight'] = 'bold'
-plt.rcParams['axes.linewidth'] = 2.0
-plt.rcParams['xtick.major.width'] = 1.8
-plt.rcParams['ytick.major.width'] = 1.8
+plt.rcParams.update({
+    'font.family': 'sans-serif',
+    'font.sans-serif': ['Arial', 'Helvetica', 'DejaVu Sans'],
+    'font.weight': 'normal',
+    'axes.labelweight': 'normal',
+    'axes.linewidth': 0.8,
+    'xtick.major.width': 0.8,
+    'ytick.major.width': 0.8,
+})
 
 fig, axes = plt.subplots(2, 2, figsize=(10, 8))
 axes = axes.flatten()
 
-lines = []
-labels = []
+lines, legend_labels = [], []
 
-for i, metric in enumerate(metrics):
+for i, (metric, ylabel, plabel) in enumerate(
+        zip(metrics, y_labels, panel_labels)):
     ax = axes[i]
-    for method in data.keys():
-        lw = 3.0 if method == 'Log-rank SIS' else 2.0
-        ms = 9 if method == 'Log-rank SIS' else 8
+
+    for method in data:
+        lw = 2.5 if method == 'Log-rank SIS' else 1.8
         zorder = 10 if method == 'Log-rank SIS' else 5
 
-        line, = ax.plot(d_values, data[method][metric],
-                        marker=markers[method],
-                        color=colors[method],
-                        linewidth=lw,
-                        markersize=ms,
-                        zorder=zorder)
+        line, = ax.plot(
+            d_values,
+            data[method][metric],
+            color=colors[method],
+            linestyle=linestyles[method],
+            marker=markers[method],
+            linewidth=lw,
+            markersize=marker_sizes[method],
+            zorder=zorder
+        )
 
         if i == 0:
             lines.append(line)
-            labels.append(method)
+            legend_labels.append(method)
+
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    ax.yaxis.grid(True, linestyle='--', linewidth=0.5,
+                  color='gray', alpha=0.35)
+    ax.set_axisbelow(True)
 
     ax.set_xticks(d_values)
-    ax.set_xlabel('Submodel Size $d$', fontsize=16)
-    ax.set_ylabel(y_labels[i], fontsize=16)
+    ax.set_xlabel('Submodel Size $d$', fontsize=14)
+    ax.set_ylabel(ylabel, fontsize=14)
+    ax.tick_params(axis='both', which='major',
+                   labelsize=12, direction='out', length=4)
 
-    ax.tick_params(axis='both', which='major', labelsize=14, direction='out', length=6)
-    for label in ax.get_xticklabels() + ax.get_yticklabels():
-        label.set_fontweight('bold')
+    ax.text(0.03, 0.97, plabel,
+            transform=ax.transAxes,
+            fontsize=13, va='top', ha='left')
 
-fig.legend(lines, labels,
-           loc='lower center',
-           bbox_to_anchor=(0.5, 0.0),
-           ncol=3,
-           prop={'weight': 'bold', 'size': 14},
-           frameon=False,
-           columnspacing=2.5,
-           handletextpad=0.5)
+fig.legend(
+    lines, legend_labels,
+    loc='lower center',
+    bbox_to_anchor=(0.5, 0.0),
+    ncol=3,
+    prop={'size': 12},
+    frameon=False,
+    columnspacing=2.0,
+    handletextpad=0.5,
+    handlelength=3.0
+)
 
-plt.tight_layout(rect=[0, 0.13, 1, 1], w_pad=0.8, h_pad=0.8)
+plt.tight_layout(rect=[0, 0.12, 1, 1], w_pad=1.0, h_pad=1.0)
 
-plt.savefig('GoF_Sensitivity_Analysis_Bold_Compact.pdf', format='pdf', bbox_inches='tight')
-plt.savefig('GoF_Sensitivity_Analysis_Bold_Compact.png', dpi=600, bbox_inches='tight')
-
+plt.savefig('GoF_Sensitivity_Analysis.pdf',
+            format='pdf', bbox_inches='tight')
+plt.savefig('GoF_Sensitivity_Analysis.png',
+            dpi=600, bbox_inches='tight')
 plt.show()
