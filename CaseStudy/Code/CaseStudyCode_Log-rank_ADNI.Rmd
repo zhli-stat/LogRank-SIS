@@ -21,6 +21,7 @@ library(ggplot2)
 library(scales)
 library(energy)
 library(Icens)
+library(interval)
 ```
 
 
@@ -128,37 +129,40 @@ cat("  Inf in 'mid':", sum(is.infinite(mid)),
 
 ## Screening Functions
 ```{r core_functions}
-turnbull_em_npmle <- function(l, r, supp, max_iter = 1000, tol = 1e-10) {
-  n <- length(l); J <- length(supp)
-  alpha <- matrix(0.0, n, J)
-  for (i in seq_len(n)) {
-    li <- l[i]; ri <- r[i]
-    if      ( is.finite(li) &&  is.finite(ri)) alpha[i, supp >  li & supp <= ri] <- 1.0
-    else if ( is.finite(li) && !is.finite(ri)) alpha[i, supp >  li              ] <- 1.0
-    else if (!is.finite(li) &&  is.finite(ri)) alpha[i,               supp <= ri] <- 1.0
+npmle_on_grid <- function(l, r, supp) {
+  fit <- initcomputeMLE(l, r)
+  im  <- fit$intmap
+
+
+  rpts <- if (nrow(im) == 2L) as.numeric(im[2, ]) else as.numeric(im[, 2])
+  pf   <- as.numeric(fit$pf)
+  p    <- numeric(length(supp))
+  keep <- which(pf > 0 & is.finite(rpts))
+  for (k in keep) {
+    j <- which.min(abs(supp - rpts[k]))
+    p[j] <- p[j] + pf[k]
   }
-  covered <- colSums(alpha) > 0
-  if (!any(covered)) return(rep(0.0, J))
-  alpha_c <- alpha[, covered, drop = FALSE]
-  Jc      <- sum(covered)
-  p       <- rep(1.0 / Jc, Jc)
-  for (iter in seq_len(max_iter)) {
-    p_old <- p
-    denom <- as.vector(alpha_c %*% p)
-    denom[denom < 1e-14] <- 1e-14
-    w     <- sweep(alpha_c * matrix(p, n, Jc, byrow = TRUE), 1, denom, "/")
-    p     <- colMeans(w)
-    if (max(abs(p - p_old)) < tol) break
+  tot <- sum(p)
+  if (tot <= 0) {
+    attr(p, "mass_beyond_support") <- 1
+    return(p)
   }
-  p_full          <- numeric(J)
-  p_full[covered] <- p
-  p_full
+  p <- p / tot
+  attr(p, "mass_beyond_support") <- 1 - tot
+  p
 }
 
+
 precompute_logrank_globals <- function(l, r) {
-  n     <- length(l)
-  supp  <- sort(unique(c(l[is.finite(l)], r[is.finite(r)])))
-  p_hat <- turnbull_em_npmle(l, r, supp)
+  n      <- length(l)
+  supp   <- sort(unique(c(l[is.finite(l)], r[is.finite(r)])))
+  p_hat  <- npmle_on_grid(l, r, supp)
+  m_tail <- attr(p_hat, "mass_beyond_support")
+  p_hat  <- as.numeric(p_hat)
+  if (m_tail > 1e-8) {
+    supp  <- c(supp, max(supp) + 1)
+    p_hat <- c(p_hat * (1 - m_tail), m_tail)
+  }
   active  <- p_hat > 1e-14
   supp_a  <- supp[active]
   p_hat_a <- p_hat[active] / sum(p_hat[active])
@@ -175,32 +179,38 @@ precompute_logrank_globals <- function(l, r) {
   w     <- sweep(alpha * matrix(p_hat_a, n, Ja, byrow = TRUE), 1, denom, "/")
   d_j   <- colSums(w)
   n_j   <- rev(cumsum(rev(d_j)))
+  ok    <- n_j > 1e-9
+  c_i   <- as.vector(w %*% (ok - cumsum(ifelse(ok, d_j / n_j, 0))))
   list(supp = supp_a, p_hat = p_hat_a, alpha = alpha,
-       w = w, d_j = d_j, n_j = n_j, J = Ja, n = n)
+       w = w, d_j = d_j, n_j = n_j, c_i = c_i, J = Ja, n = n, tail_mass = m_tail)
 }
 
 
 screen_logrank_raw <- function(no, x_mat, g) {
   x_k <- x_mat[, no]
   if (sum(x_k) < 2 || sum(1 - x_k) < 2) return(0)
-  d_jk <- colSums(x_k * g$w)
-  n_jk <- rev(cumsum(rev(d_jk)))
-  ok   <- g$n_j > 1e-9
-  if (sum(ok) == 0) return(0)
-  U_n     <- sum(d_jk[ok] - g$d_j[ok] * (n_jk[ok] / g$n_j[ok])) / g$n
+  U_n     <- sum(x_k * g$c_i) / g$n
   p_hat_k <- mean(x_k)
-  abs(U_n) / (p_hat_k * (1 - p_hat_k) + 1e-8)
+
+  abs(U_n) / sqrt(p_hat_k * (1 - p_hat_k) + 1e-8)
 }
 
-# NOTE: The original ADD-SIS implementation (Zhong et al., 2023) relies on
-# Icens::initcomputeMLE for stratified NPMLE estimation. In the ADNI setting,
-# where the support set is larger (|A| = 112) and many SNPs have near-minimal
-# minor allele frequencies, subgroup-specific NPMLE fits occasionally fail to
-# converge. We therefore replace the backend with a custom EM routine and wrap
-# each stratified call in a tryCatch handler, returning a zero vector upon
-# failure. This adjustment improves numerical stability without altering the
-# algorithmic structure: each feature still requires two independent NPMLE fits,
-# preserving the O(p) time complexity of the original method.
+subcdf_on_grid <- function(l, r, supp) {
+  p <- npmle_on_grid(l, r, supp)
+  cumsum(as.numeric(p)) * (1 - attr(p, "mass_beyond_support"))
+}
+
+
+
+
+
+
+
+
+
+
+
+add_fit_failures <- 0L
 screen_add_adni <- function(no, x_mat, l, r) {
   x_k  <- x_mat[, no]
   idx1 <- which(x_k == 1); idx0 <- which(x_k == 0)
@@ -208,9 +218,11 @@ screen_add_adni <- function(no, x_mat, l, r) {
   supp_all <- sort(unique(c(l[is.finite(l) & l > 0], r[is.finite(r)])))
   M <- length(supp_all); if (M == 0) return(0)
   denom_w <- max(supp_all) - min(supp_all); if (denom_w <= 0) return(0)
-  p1 <- tryCatch(turnbull_em_npmle(l[idx1], r[idx1], supp_all), error = function(e) rep(0, M))
-  p0 <- tryCatch(turnbull_em_npmle(l[idx0], r[idx0], supp_all), error = function(e) rep(0, M))
-  sum(abs(cumsum(p1) - cumsum(p0)) * diff(c(0, supp_all))) / denom_w
+  F1 <- tryCatch(subcdf_on_grid(l[idx1], r[idx1], supp_all),
+                 error = function(e) { add_fit_failures <<- add_fit_failures + 1L; rep(0, M) })
+  F0 <- tryCatch(subcdf_on_grid(l[idx0], r[idx0], supp_all),
+                 error = function(e) { add_fit_failures <<- add_fit_failures + 1L; rep(0, M) })
+  sum(abs(F1 - F0) * diff(c(0, supp_all))) / denom_w
 }
 
 Fk <- function(X0, x) vapply(x, function(xi) sum(X0 <= xi) / length(X0), numeric(1))
@@ -253,6 +265,8 @@ cat("Pre-computing global NPMLE for Log-rank SIS...\n")
 a <- Sys.time()
 logrank_globals_adni <- precompute_logrank_globals(l, r)
 cat(sprintf("  Done in %.1f sec\n", as.numeric(Sys.time() - a, units = "secs")))
+cat(sprintf("  Global NPMLE: %d support points, %.3g of the mass beyond the last one\n",
+            logrank_globals_adni$J, logrank_globals_adni$tail_mass))
 
 cat("Running Log-rank SIS [Phase I]...\n")
 a <- Sys.time()
@@ -262,9 +276,12 @@ b <- Sys.time(); print(b - a)
 
 cat("Running ADD-SIS [Phase I]...\n")
 a <- Sys.time()
+add_fit_failures <- 0L
 score_add    <- sapply(seq_len(p_total), screen_add_adni, x_mat = X_mat, l = l, r = r)
 res_add_adni <- data.frame(screen = score_add)
 b <- Sys.time(); print(b - a)
+cat(sprintf("ADD-SIS: %d of %d stratified NPMLE fits failed\n",
+            add_fit_failures, 2 * p_total))
 
 cat("Running single-point methods (midpoint proxy M2) [Phase I]...\n")
 a <- Sys.time()
@@ -330,6 +347,17 @@ res_lr_p2 <- data.frame(screen = score_lr_p2, row.names = snp_names_p2)
 b <- Sys.time()
 cat("Log-rank SIS [Phase II] done in:"); print(b - a)
 
+cat("\nRunning ADD-SIS [Phase II]...\n")
+a <- Sys.time()
+add_fit_failures <- 0L
+score_add_p2 <- sapply(seq_len(p_total_p2), screen_add_adni,
+                       x_mat = X_phase2, l = l, r = r)
+res_add_p2 <- data.frame(screen = score_add_p2, row.names = snp_names_p2)
+b <- Sys.time()
+cat("ADD-SIS [Phase II] done in:"); print(b - a)
+cat(sprintf("ADD-SIS [Phase II]: %d of %d stratified NPMLE fits failed\n",
+            add_fit_failures, 2 * p_total_p2))
+
 cat("\nRunning KS-Filter-M2 [Phase II]...\n")
 a <- Sys.time()
 score_ks_p2 <- sapply(seq_len(p_total_p2), screen_ks,
@@ -358,6 +386,7 @@ cat("MV-SIS-M2 [Phase II] done in:"); print(b - a)
 
 cat("\n=== Phase II Speed Benchmark Summary ===\n")
 cat(sprintf("  Log-rank SIS  (Phase II, p=%d): see above\n", p_total_p2))
+cat(sprintf("  ADD-SIS       (Phase II, p=%d): see above\n", p_total_p2))
 cat(sprintf("  KS-Filter-M2  (Phase II, p=%d): see above\n", p_total_p2))
 cat(sprintf("  DC-SIS-M2     (Phase II, p=%d): see above\n", p_total_p2))
 cat(sprintf("  MV-SIS-M2     (Phase II, p=%d): see above\n", p_total_p2))
@@ -468,13 +497,24 @@ print(round(gof_50, 4))
 cat("=== Robustness Analysis: IC-Cox GoF across d values ===\n\n")
 
 d_extra <- c(15, 30, 60)
+gof_by_d <- list("50" = gof_50)
 
 for (dv in d_extra) {
   cat(sprintf("--- d = %d ---\n", dv))
   gof_dv <- gof_cox_table_adni(dv)
   print(round(gof_dv, 4))
   cat("\n")
+  gof_by_d[[as.character(dv)]] <- gof_dv
 }
+
+
+fig_input_dir <- file.path("..", "Output", "ADNI")
+dir.create(fig_input_dir, recursive = TRUE, showWarnings = FALSE)
+gof_by_d_df <- do.call(rbind, lapply(names(gof_by_d), function(dv)
+  data.frame(d = as.numeric(dv), Method = rownames(gof_by_d[[dv]]),
+             gof_by_d[[dv]], row.names = NULL)))
+write.csv(gof_by_d_df[order(gof_by_d_df$d), ],
+          file.path(fig_input_dir, "adni_gof_by_d.csv"), row.names = FALSE)
 
 cat("=== Compact Robustness Table: Log-rank SIS vs ADD-SIS ===\n")
 cat(sprintf("  %-6s  %-10s %-10s %-10s %-10s\n",
@@ -508,6 +548,11 @@ gof_lr_p2 <- model_fitting_cox_adni(adni_prepare_p2(score_lr_p2, d_gw))
 cat(sprintf("  LogLik: %.3f | AIC: %.3f | BIC: %.3f | ChiSq: %.3f\n\n",
             gof_lr_p2[1], gof_lr_p2[2], gof_lr_p2[3], gof_lr_p2[4]))
 
+cat("Fitting IC-Cox: ADD-SIS [Phase II]...\n")
+gof_add_p2 <- model_fitting_cox_adni(adni_prepare_p2(score_add_p2, d_gw))
+cat(sprintf("  LogLik: %.3f | AIC: %.3f | BIC: %.3f | ChiSq: %.3f\n\n",
+            gof_add_p2[1], gof_add_p2[2], gof_add_p2[3], gof_add_p2[4]))
+
 cat("Fitting IC-Cox: KS-Filter-M2 [Phase II]...\n")
 gof_ks_p2 <- model_fitting_cox_adni(adni_prepare_p2(score_ks_p2, d_gw))
 cat(sprintf("  LogLik: %.3f | AIC: %.3f | BIC: %.3f | ChiSq: %.3f\n\n",
@@ -524,27 +569,48 @@ cat(sprintf("  LogLik: %.3f | AIC: %.3f | BIC: %.3f | ChiSq: %.3f\n\n",
             gof_mv_p2[1], gof_mv_p2[2], gof_mv_p2[3], gof_mv_p2[4]))
 
 gof_p2_df <- data.frame(
-  LogLik = c(gof_lr_p2[1], gof_ks_p2[1], gof_dc_p2[1], gof_mv_p2[1]),
-  AIC    = c(gof_lr_p2[2], gof_ks_p2[2], gof_dc_p2[2], gof_mv_p2[2]),
-  BIC    = c(gof_lr_p2[3], gof_ks_p2[3], gof_dc_p2[3], gof_mv_p2[3]),
-  ChiSq  = c(gof_lr_p2[4], gof_ks_p2[4], gof_dc_p2[4], gof_mv_p2[4]),
-  row.names = c("Log-rank SIS", "KS-Filter-M2", "DC-SIS-M2", "MV-SIS-M2")
+  LogLik = c(gof_lr_p2[1], gof_add_p2[1], gof_ks_p2[1], gof_dc_p2[1], gof_mv_p2[1]),
+  AIC    = c(gof_lr_p2[2], gof_add_p2[2], gof_ks_p2[2], gof_dc_p2[2], gof_mv_p2[2]),
+  BIC    = c(gof_lr_p2[3], gof_add_p2[3], gof_ks_p2[3], gof_dc_p2[3], gof_mv_p2[3]),
+  ChiSq  = c(gof_lr_p2[4], gof_add_p2[4], gof_ks_p2[4], gof_dc_p2[4], gof_mv_p2[4]),
+  row.names = c("Log-rank SIS", "ADD-SIS", "KS-Filter-M2", "DC-SIS-M2", "MV-SIS-M2")
 )
 cat("=== Phase II IC-Cox Summary (d =", d_gw, ") ===\n")
 print(round(gof_p2_df, 4))
 
 cat("\n=== Phase II: Top 5 Log-rank SIS SNPs (candidates for literature search) ===\n")
 rank_lr_p2   <- rank(-score_lr_p2)
+rank_add_p2  <- rank(-score_add_p2)
 top5_p2_idx  <- order(score_lr_p2, decreasing = TRUE)[1:5]
 top5_p2_snps <- snp_names_p2[top5_p2_idx]
 top5_p2_df   <- data.frame(
-  Rank  = 1:5,
-  SNP   = top5_p2_snps,
-  Score = round(score_lr_p2[top5_p2_idx], 6),
-  MAF   = round(pmin(colMeans(X_phase2[, top5_p2_idx, drop = FALSE]),
-                     1 - colMeans(X_phase2[, top5_p2_idx, drop = FALSE])), 4)
+  Rank     = 1:5,
+  SNP      = top5_p2_snps,
+  Score    = round(score_lr_p2[top5_p2_idx], 6),
+  ADD_rank = round(rank_add_p2[top5_p2_idx]),
+  MAF      = round(pmin(colMeans(X_phase2[, top5_p2_idx, drop = FALSE]),
+                        1 - colMeans(X_phase2[, top5_p2_idx, drop = FALSE])), 4)
 )
 print(top5_p2_df)
+
+cat("\n=== Phase II: Top 5 ADD-SIS SNPs ===\n")
+top5_add_idx <- order(score_add_p2, decreasing = TRUE)[1:5]
+top5_add_df  <- data.frame(
+  Rank    = 1:5,
+  SNP     = snp_names_p2[top5_add_idx],
+  Score   = round(score_add_p2[top5_add_idx], 6),
+  LR_rank = round(rank_lr_p2[top5_add_idx]),
+  MAF     = round(pmin(colMeans(X_phase2[, top5_add_idx, drop = FALSE]),
+                       1 - colMeans(X_phase2[, top5_add_idx, drop = FALSE])), 4)
+)
+print(top5_add_df)
+
+sel_lr_p2  <- order(score_lr_p2,  decreasing = TRUE)[seq_len(d_gw)]
+sel_add_p2 <- order(score_add_p2, decreasing = TRUE)[seq_len(d_gw)]
+cat(sprintf("\nPhase II top-%d overlap, Log-rank SIS vs ADD-SIS: %d of %d\n",
+            d_gw, length(intersect(sel_lr_p2, sel_add_p2)), d_gw))
+cat(sprintf("Spearman correlation of the two score vectors: %.4f\n",
+            cor(score_lr_p2, score_add_p2, method = "spearman")))
 cat("\nNote: Search GWAS Catalog (https://www.ebi.ac.uk/gwas/) or NCBI dbSNP\n")
 cat("using query: '<rs_id> Alzheimer' or '<rs_id> cognitive decline'\n")
 ```
@@ -788,7 +854,7 @@ print(round(summary_adni_50, 4))
 ```
 
 
-## Top SNP Analysis and CDF Figure
+## Top SNP Analysis
 ```{r snp_analysis}
 d             <- 50
 rank_lr_adni  <- rank(-res_lr_adni$screen)
@@ -848,156 +914,3 @@ if (!is.null(fit_alt) && !is.null(fit_null)) {
 }
 ```
 
-```{r cdf_four_panel, fig.width=10, fig.height=9}
-plot_ic_cdf <- function(snp_name, x_mat, l, r, main_title,
-                        note_text = NULL,
-                        col0 = "steelblue", col1 = "tomato") {
-
-  x_k  <- x_mat[, snp_name]
-  idx1 <- which(x_k == 1)
-  idx0 <- which(x_k == 0)
-
-  supp_all <- sort(unique(c(
-    l[is.finite(l) & l > 0],
-    r[is.finite(r)]
-  )))
-  if (length(supp_all) < 2 || length(idx1) < 2 || length(idx0) < 2) {
-    plot.new()
-    title(main = main_title)
-    mtext("(insufficient data)", side = 3, cex = 0.75)
-    return(invisible(NULL))
-  }
-
-  p1 <- tryCatch(
-    turnbull_em_npmle(l[idx1], r[idx1], supp_all),
-    error = function(e) rep(0, length(supp_all))
-  )
-  p0 <- tryCatch(
-    turnbull_em_npmle(l[idx0], r[idx0], supp_all),
-    error = function(e) rep(0, length(supp_all))
-  )
-
-  F1 <- cumsum(p1)
-  F0 <- cumsum(p0)
-
-  t_plot <- c(0, supp_all)
-  F1_plot <- c(0, F1)
-  F0_plot <- c(0, F0)
-
-  maf_v <- round(min(mean(x_k), 1 - mean(x_k)), 4)
-
-  plot(t_plot, F0_plot, type = "s",
-       col = col0, lwd = 2.5,
-       ylim = c(0, 1),
-       xlab = "Time to Dementia (months)",
-       ylab = expression(italic(F)(italic(t)) == 1 - italic(S)(italic(t))),
-       main = main_title,
-       las  = 1, bty = "l")
-  lines(t_plot, F1_plot, type = "s", col = col1, lwd = 2.5)
-
-  legend("topleft",
-         legend = c(sprintf("Ref  X=0  (n = %d)", length(idx0)),
-                    sprintf("Alt  X=1  (n = %d)", length(idx1)),
-                    sprintf("MAF = %.4f", maf_v)),
-         col  = c(col0, col1, NA),
-         lwd  = c(2.5, 2.5, NA),
-         lty  = c(1, 1, NA),
-         bty  = "n", cex = 0.80)
-
-  if (!is.null(note_text))
-    mtext(note_text, side = 3, line = 0.25, cex = 0.70, col = "gray35")
-
-  invisible(NULL)
-}
-
-snp_freq_p1 <- colMeans(X_mat, na.rm = TRUE)
-snp_maf_p1  <- pmin(snp_freq_p1, 1 - snp_freq_p1)
-
-both_df <- data.frame(
-  SNP      = both_selected,
-  LR_rank  = rank_lr_adni [snp_names %in% both_selected],
-  ADD_rank = rank_add_adni[snp_names %in% both_selected]
-)
-both_df$sum_rank <- both_df$LR_rank + both_df$ADD_rank
-snp_a <- both_df$SNP[which.min(both_df$sum_rank)]
-
-only_lr_df <- data.frame(
-  SNP      = only_lr,
-  LR_rank  = rank_lr_adni [snp_names %in% only_lr],
-  ADD_rank = rank_add_adni[snp_names %in% only_lr],
-  MAF      = snp_maf_p1   [snp_names %in% only_lr]
-)
-lr_cand <- only_lr_df[only_lr_df$LR_rank <= 40 & only_lr_df$ADD_rank > 150, ]
-if (nrow(lr_cand) == 0) lr_cand <- only_lr_df[only_lr_df$LR_rank <= 50, ]
-snp_b <- lr_cand$SNP[which.min(lr_cand$MAF)]
-
-only_add_df <- data.frame(
-  SNP      = only_add,
-  LR_rank  = rank_lr_adni [snp_names %in% only_add],
-  ADD_rank = rank_add_adni[snp_names %in% only_add]
-)
-preferred_c <- "rs1895140_G"
-snp_c <- if (preferred_c %in% only_add) preferred_c else
-  only_add_df$SNP[which.max(only_add_df$LR_rank)]
-
-null_df <- data.frame(SNP = snp_names, LR_rank = rank_lr_adni,
-                      ADD_rank = rank_add_adni)
-null_cand <- null_df[null_df$LR_rank > 4000 & null_df$ADD_rank > 4000, ]
-set.seed(2025)
-snp_d <- if (nrow(null_cand) > 0) {
-  null_cand$SNP[sample(nrow(null_cand), 1)]
-} else {
-  null_df$SNP[which.max(null_df$LR_rank + null_df$ADD_rank)]
-}
-
-cat("=== Four-panel CDF figure: selected SNPs ===\n")
-for (nm in c("snp_a", "snp_b", "snp_c", "snp_d")) {
-  sv <- get(nm)
-  cat(sprintf("  %s [%s]:  LR_rank = %d  |  ADD_rank = %d  |  MAF = %.4f\n",
-              nm, sv,
-              rank_lr_adni [which(snp_names == sv)],
-              rank_add_adni[which(snp_names == sv)],
-              snp_maf_p1   [which(snp_names == sv)]))
-}
-
-op <- par(mfrow = c(2, 2),
-          mar   = c(4.2, 4.2, 4.0, 1.5),
-          oma   = c(0, 0, 2.5, 0))
-
-plot_ic_cdf(
-  snp_a, X_mat, l, r,
-  main_title = sprintf("(a) Consensus strong signal\n%s", snp_a),
-  note_text  = sprintf("LR rank %d  |  ADD rank %d",
-               rank_lr_adni [which(snp_names == snp_a)],
-               rank_add_adni[which(snp_names == snp_a)])
-)
-
-plot_ic_cdf(
-  snp_b, X_mat, l, r,
-  main_title = sprintf("(b) Log-rank unique — rare monotone signal\n%s", snp_b),
-  note_text  = sprintf("LR rank %d  |  ADD rank %d",
-               rank_lr_adni [which(snp_names == snp_b)],
-               rank_add_adni[which(snp_names == snp_b)])
-)
-
-plot_ic_cdf(
-  snp_c, X_mat, l, r,
-  main_title = sprintf("(c) ADD-SIS unique — crossing hazards\n%s", snp_c),
-  note_text  = sprintf("LR rank %d  |  ADD rank %d",
-               rank_lr_adni [which(snp_names == snp_c)],
-               rank_add_adni[which(snp_names == snp_c)])
-)
-
-plot_ic_cdf(
-  snp_d, X_mat, l, r,
-  main_title = sprintf("(d) Null baseline — no signal\n%s", snp_d),
-  note_text  = sprintf("LR rank %d  |  ADD rank %d",
-               rank_lr_adni [which(snp_names == snp_d)],
-               rank_add_adni[which(snp_names == snp_d)])
-)
-
-mtext("NPMLE Cumulative Incidence F(t) by SNP Genotype Group  (ADNI, Phase I)",
-      outer = TRUE, cex = 1.05, font = 2)
-
-par(op)
-```

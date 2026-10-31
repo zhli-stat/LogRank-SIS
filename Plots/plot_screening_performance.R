@@ -1,8 +1,6 @@
 library(ggplot2)
 library(dplyr)
 
-# rho = 0.2, Case 1 (rat = 0.3); single-point methods use M1 imputation.
-# Row indices in the 78-row result matrix for each method's active-predictor ranks.
 method_rows <- list(
   "Log-Rank (Proposed)" = 16:20,
   "ADD-SIS"             = 1:5,

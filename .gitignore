@@ -1,0 +1,22 @@
+# R session data and history
+.RData
+.Rhistory
+.RDataTmp
+.Rproj.user/
+
+# Data / intermediates that are not redistributed
+*.rds
+Simulation/Example1-3/Intermediate/
+Simulation/Example1-3/Code/Simulation/
+Simulation/Outlier_Case/Intermediate/
+
+# Knitted / rendered outputs
+*.html
+
+# Generated figures and results
+*.png
+*.pdf
+
+# Python caches
+__pycache__/
+*.pyc

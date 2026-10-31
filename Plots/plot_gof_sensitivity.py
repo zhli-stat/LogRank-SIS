@@ -1,40 +1,30 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-d_values = [15, 30, 50, 60]
+from pathlib import Path
+import pandas as pd
 
-data = {
-    'Log-rank SIS': {
-        'LogLik': [-357.263, -331.806, -295.865, -285.005],
-        'ChiSq': [138.830, 189.743, 261.626, 283.345],
-        'AIC': [744.526, 721.613, 689.730, 686.011],
-        'BIC': [798.940, 826.814, 867.483, 896.413]
-    },
-    'ADD-SIS': {
-        'LogLik': [-387.517, -369.296, -350.239, -327.011],
-        'ChiSq': [78.321, 114.764, 152.878, 199.334],
-        'AIC': [805.034, 796.592, 794.478, 768.022],
-        'BIC': [859.449, 901.793, 964.976, 974.796]
-    },
-    'MV-SIS (M3)': {
-        'LogLik': [-386.409, -362.292, -329.998, -322.471],
-        'ChiSq': [80.538, 128.771, 193.359, 208.415],
-        'AIC': [804.817, 786.585, 759.997, 762.941],
-        'BIC': [862.859, 899.041, 941.378, 976.971]
-    },
-    'DC-SIS (M1)': {
-        'LogLik': [-387.240, -360.189, -341.954, -328.795],
-        'ChiSq': [78.876, 132.977, 169.447, 195.766],
-        'AIC': [806.480, 782.379, 785.909, 777.590],
-        'BIC': [864.522, 894.835, 970.918, 995.247]
-    },
-    'KF (M2)': {
-        'LogLik': [-391.735, -363.075, -343.406, -329.948],
-        'ChiSq': [69.885, 127.205, 166.544, 193.460],
-        'AIC': [807.470, 782.150, 782.811, 773.895],
-        'BIC': [851.002, 883.724, 956.937, 980.670]
-    }
+IN_CSV = (Path(__file__).resolve().parents[1]
+          / "CaseStudy" / "Output" / "ADNI" / "adni_gof_by_d.csv")
+if not IN_CSV.exists():
+    raise SystemExit(f"Input not found: {IN_CSV}. Knit the ADNI Rmd first.")
+gof = pd.read_csv(IN_CSV)
+
+SHOWN = {
+    'Log-rank SIS': 'Log-rank SIS',
+    'ADD-SIS':      'ADD-SIS',
+    'MV-SIS (M3)':  'MV-SIS-M3',
+    'DC-SIS (M1)':  'DC-SIS-M1',
+    'KF (M2)':      'KS-Filter-M2',
 }
+
+d_values = sorted(gof['d'].unique().tolist())
+data = {}
+for label, method in SHOWN.items():
+    sub = gof[gof['Method'] == method].set_index('d').reindex(d_values)
+    data[label] = {m: sub[m].tolist() for m in ['LogLik', 'ChiSq', 'AIC', 'BIC']}
+
+print(gof[gof['d'] == 50][['Method', 'LogLik']].to_string(index=False))
 
 colors = {
     'Log-rank SIS': '#c44e52',

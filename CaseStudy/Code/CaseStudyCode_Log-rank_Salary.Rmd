@@ -113,37 +113,40 @@ screen_add <- function(no,s=s) {
 
 ## Log-rank SIS Code
 ```{r}
-turnbull_em_npmle <- function(l, r, supp, max_iter = 1000, tol = 1e-10) {
-  n <- length(l); J <- length(supp)
-  alpha <- matrix(0.0, n, J)
-  for (i in seq_len(n)) {
-    li <- l[i]; ri <- r[i]
-    if      ( is.finite(li) &&  is.finite(ri)) alpha[i, supp >  li & supp <= ri] <- 1.0
-    else if ( is.finite(li) && !is.finite(ri)) alpha[i, supp >  li              ] <- 1.0
-    else if (!is.finite(li) &&  is.finite(ri)) alpha[i,               supp <= ri] <- 1.0
+npmle_on_grid <- function(l, r, supp) {
+  fit <- initcomputeMLE(l, r)
+  im  <- fit$intmap
+
+
+  rpts <- if (nrow(im) == 2L) as.numeric(im[2, ]) else as.numeric(im[, 2])
+  pf   <- as.numeric(fit$pf)
+  p    <- numeric(length(supp))
+  keep <- which(pf > 0 & is.finite(rpts))
+  for (k in keep) {
+    j <- which.min(abs(supp - rpts[k]))
+    p[j] <- p[j] + pf[k]
   }
-  covered  <- colSums(alpha) > 0
-  if (!any(covered)) return(rep(0.0, J))
-  alpha_c  <- alpha[, covered, drop = FALSE]
-  Jc       <- sum(covered)
-  p        <- rep(1.0 / Jc, Jc)
-  for (iter in seq_len(max_iter)) {
-    p_old  <- p
-    denom  <- as.vector(alpha_c %*% p)
-    denom[denom < 1e-14] <- 1e-14
-    w      <- sweep(alpha_c * matrix(p, n, Jc, byrow = TRUE), 1, denom, "/")
-    p      <- colMeans(w)
-    if (max(abs(p - p_old)) < tol) break
+  tot <- sum(p)
+  if (tot <= 0) {
+    attr(p, "mass_beyond_support") <- 1
+    return(p)
   }
-  p_full              <- numeric(J)
-  p_full[covered]     <- p
-  p_full
+  p <- p / tot
+  attr(p, "mass_beyond_support") <- 1 - tot
+  p
 }
 
+
 precompute_logrank_globals <- function(l, r) {
-  n     <- length(l)
-  supp  <- sort(unique(c(l[is.finite(l)], r[is.finite(r)])))
-  p_hat <- turnbull_em_npmle(l, r, supp)
+  n      <- length(l)
+  supp   <- sort(unique(c(l[is.finite(l)], r[is.finite(r)])))
+  p_hat  <- npmle_on_grid(l, r, supp)
+  m_tail <- attr(p_hat, "mass_beyond_support")
+  p_hat  <- as.numeric(p_hat)
+  if (m_tail > 1e-8) {
+    supp  <- c(supp, max(supp) + 1)
+    p_hat <- c(p_hat * (1 - m_tail), m_tail)
+  }
   active  <- p_hat > 1e-14
   supp_a  <- supp[active]
   p_hat_a <- p_hat[active] / sum(p_hat[active])
@@ -160,20 +163,19 @@ precompute_logrank_globals <- function(l, r) {
   w   <- sweep(alpha * matrix(p_hat_a, n, Ja, byrow = TRUE), 1, denom, "/")
   d_j <- colSums(w)
   n_j <- rev(cumsum(rev(d_j)))
+  ok  <- n_j > 1e-9
+  c_i <- as.vector(w %*% (ok - cumsum(ifelse(ok, d_j / n_j, 0))))
   list(supp = supp_a, p_hat = p_hat_a, alpha = alpha,
-       w = w, d_j = d_j, n_j = n_j, J = Ja, n = n)
+       w = w, d_j = d_j, n_j = n_j, c_i = c_i, J = Ja, n = n, tail_mass = m_tail)
 }
 
 screen_logrank_raw <- function(no, x_mat, g) {
   x_k <- x_mat[, no]
   if (sum(x_k) < 2 || sum(1 - x_k) < 2) return(0)
-  d_jk <- colSums(x_k * g$w)
-  n_jk <- rev(cumsum(rev(d_jk)))
-  ok   <- g$n_j > 1e-9
-  if (sum(ok) == 0) return(0)
-  U_n     <- sum(d_jk[ok] - g$d_j[ok] * (n_jk[ok] / g$n_j[ok])) / g$n
+  U_n     <- sum(x_k * g$c_i) / g$n
   p_hat_k <- mean(x_k)
-  abs(U_n) / (p_hat_k * (1 - p_hat_k) + 1e-8)
+
+  abs(U_n) / sqrt(p_hat_k * (1 - p_hat_k) + 1e-8)
 }
 ```
 
@@ -296,6 +298,8 @@ print (b-a)
 
 a = Sys.time()
 logrank_globals <- precompute_logrank_globals(l, r)
+cat(sprintf("Global NPMLE: %d support points, %.3g of the mass beyond the last one\n",
+            logrank_globals$J, logrank_globals$tail_mass))
 score_lr <- sapply(seq_len(ncol(s)), screen_logrank_raw,
                    x_mat = as.matrix(s), g = logrank_globals)
 res_lr <- data.frame(screen=score_lr)
@@ -367,7 +371,7 @@ word_names  <- word_filter$dict_filter
 GLOBAL_MAX_X <- 40000 
 
 words_cfg <- list(
-  list(word="优化算法",   label="Optimization",  tag="(a)"),
+  list(word="算法",       label="Algorithm",     tag="(a)"),
   list(word="tensorflow", label="TensorFlow",    tag="(b)"),
   list(word="mapreduce",  label="MapReduce",     tag="(c)"),
   list(word="应用",       label="Application",   tag="(d)")
@@ -509,6 +513,23 @@ fig_out <- (panels[["(a)"]] | panels[["(b)"]]) /
   theme(legend.position = "bottom", legend.box.margin = margin(t = 15))
 
 print(fig_out)
+
+
+
+
+fig_input_dir <- file.path(dirname(getwd()), "Output", "Salary")
+dir.create(fig_input_dir, recursive = TRUE, showWarnings = FALSE)
+write.csv(data.frame(word = word_names,
+                     add_sc = res1$screen, lr_sc = res_lr$screen,
+                     add_rk = rank_add,    lr_rk = rank_lr),
+          file.path(fig_input_dir, "salary_scores.csv"),
+          row.names = FALSE, fileEncoding = "UTF-8")
+write.csv(data.frame(word  = sapply(words_cfg, `[[`, "word"),
+                     label = sapply(words_cfg, `[[`, "label"),
+                     tag   = sapply(words_cfg, `[[`, "tag"),
+                     d = d, GLOBAL_MAX_X = GLOBAL_MAX_X),
+          file.path(fig_input_dir, "salary_fig_config.csv"),
+          row.names = FALSE, fileEncoding = "UTF-8")
 ```
 
 ## AFT Model Fitting — Global Goodness-of-Fit (Table 7)

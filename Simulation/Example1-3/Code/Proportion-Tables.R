@@ -69,7 +69,6 @@ build_prop_table <- function(res_grid, rho_vals) {
   do.call(rbind, all_rows)
 }
 
-
 lm_dir <- file.path("Simulation", "Example1-3", "Intermediate", "LM_Log-rank")
 lm_res_grid <- list(
   b_c1_r02 = read_res(file.path(lm_dir, "Full_res1_Time_LR.csv")),
@@ -85,46 +84,35 @@ lm_prop_table <- build_prop_table(lm_res_grid, rho_vals = c("0.2", "0.5"))
 cat("\n=== LM Example (d1=", d1, ", d2=", d2, ", d3=", d3, ") ===\n\n", sep = "")
 print(lm_prop_table, row.names = FALSE)
 
-
 glm_dir <- file.path("Simulation", "Example1-3", "Intermediate", "GLM_Log-rank")
 glm_res_grid <- list(
   b_c1_r02 = read_res(file.path(glm_dir, "Full_res1_Time_LR.csv")),
   b_c1_r05 = read_res(file.path(glm_dir, "Full_res2_Time_LR.csv")),
-  b_c1_r08 = read_res(file.path(glm_dir, "Full_res3_Time_LR.csv")),
   b_c2_r02 = read_res(file.path(glm_dir, "Full_res4_Time_LR.csv")),
   b_c2_r05 = read_res(file.path(glm_dir, "Full_res5_Time_LR.csv")),
-  b_c2_r08 = read_res(file.path(glm_dir, "Full_res6_Time_LR.csv")),
   u_c1_r02 = read_res(file.path(glm_dir, "Full_res7_Time_LR.csv")),
   u_c1_r05 = read_res(file.path(glm_dir, "Full_res8_Time_LR.csv")),
-  u_c1_r08 = read_res(file.path(glm_dir, "Full_res9_Time_LR.csv")),
   u_c2_r02 = read_res(file.path(glm_dir, "Full_res10_Time_LR.csv")),
-  u_c2_r05 = read_res(file.path(glm_dir, "Full_res11_Time_LR.csv")),
-  u_c2_r08 = read_res(file.path(glm_dir, "Full_res12_Time_LR.csv"))
+  u_c2_r05 = read_res(file.path(glm_dir, "Full_res11_Time_LR.csv"))
 )
-glm_prop_table <- build_prop_table(glm_res_grid, rho_vals = c("0.2", "0.5", "0.8"))
+glm_prop_table <- build_prop_table(glm_res_grid, rho_vals = c("0.2", "0.5"))
 cat("\n=== GLM Example ===\n\n")
 print(glm_prop_table, row.names = FALSE)
-
 
 cox_dir <- file.path("Simulation", "Example1-3", "Intermediate", "COX_Log-rank")
 cox_res_grid <- list(
   b_c1_r02 = read_res(file.path(cox_dir, "Full_res1_Time_LR.csv")),
   b_c1_r05 = read_res(file.path(cox_dir, "Full_res2_Time_LR.csv")),
-  b_c1_r08 = read_res(file.path(cox_dir, "Full_res3_Time_LR.csv")),
   b_c2_r02 = read_res(file.path(cox_dir, "Full_res4_Time_LR.csv")),
   b_c2_r05 = read_res(file.path(cox_dir, "Full_res5_Time_LR.csv")),
-  b_c2_r08 = read_res(file.path(cox_dir, "Full_res6_Time_LR.csv")),
   u_c1_r02 = read_res(file.path(cox_dir, "Full_res7_Time_LR.csv")),
   u_c1_r05 = read_res(file.path(cox_dir, "Full_res8_Time_LR.csv")),
-  u_c1_r08 = read_res(file.path(cox_dir, "Full_res9_Time_LR.csv")),
   u_c2_r02 = read_res(file.path(cox_dir, "Full_res10_Time_LR.csv")),
-  u_c2_r05 = read_res(file.path(cox_dir, "Full_res11_Time_LR.csv")),
-  u_c2_r08 = read_res(file.path(cox_dir, "Full_res12_Time_LR.csv"))
+  u_c2_r05 = read_res(file.path(cox_dir, "Full_res11_Time_LR.csv"))
 )
-cox_prop_table <- build_prop_table(cox_res_grid, rho_vals = c("0.2", "0.5", "0.8"))
+cox_prop_table <- build_prop_table(cox_res_grid, rho_vals = c("0.2", "0.5"))
 cat("\n=== COX Example ===\n\n")
 print(cox_prop_table, row.names = FALSE)
-
 
 out_dir <- file.path("Simulation", "Example1-3", "Tables")
 if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)

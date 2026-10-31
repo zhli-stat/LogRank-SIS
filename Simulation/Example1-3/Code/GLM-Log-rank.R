@@ -13,7 +13,6 @@ if (!dir.exists(output_dir)) {
   dir.create(output_dir, recursive = TRUE)
 }
 
-
 screen_npmle1 <- function(i,l,r,s,basis){
   every = data.frame(l=l,r=r,V3=s[,i])
   part1 = every[every$V3==0,c('l','r')]
@@ -22,7 +21,7 @@ screen_npmle1 <- function(i,l,r,s,basis){
   b <- initcomputeMLE(part2$l,part2$r)
   df1 <- data.frame(cbind(t(a$intmap),a$pf))
   df2 <- data.frame(cbind(t(b$intmap),b$pf))
-  
+
   if (length(a$pf) == 1 && a$pf == 1){
     data2 <- transs(df2)
     tmp2 <- merge(data2, basis, all.y = TRUE)
@@ -52,7 +51,7 @@ screen_npmle2 <- function(i,l,r,s,basis){
   b <- initcomputeMLE(part2$l,part2$r)
   df1 <- data.frame(cbind(t(a$intmap),a$pf))
   df2 <- data.frame(cbind(t(b$intmap),b$pf))
-  
+
   if (length(a$pf) == 1 && a$pf == 1){
     data2 <- transs(df2)
     tmp2 <- merge(data2, basis, all.y = TRUE)
@@ -82,7 +81,7 @@ screen_npmle3 <- function(i,l,r,s,basis){
   b <- initcomputeMLE(part2$l,part2$r)
   df1 <- data.frame(cbind(t(a$intmap),a$pf))
   df2 <- data.frame(cbind(t(b$intmap),b$pf))
-  
+
   if (length(a$pf) == 1 && a$pf == 1){
     data2 <- transs(df2)
     tmp2 <- merge(data2, basis, all.y = TRUE)
@@ -104,37 +103,38 @@ screen_npmle3 <- function(i,l,r,s,basis){
   return(max(abs(sta)))
 }
 
-turnbull_em_npmle <- function(l, r, supp, max_iter = 1000, tol = 1e-10) {
-  n <- length(l); J <- length(supp)
-  alpha <- matrix(0.0, n, J)
-  for (i in seq_len(n)) {
-    li <- l[i]; ri <- r[i]
-    if      ( is.finite(li) &&  is.finite(ri)) alpha[i, supp >  li & supp <= ri] <- 1.0
-    else if ( is.finite(li) && !is.finite(ri)) alpha[i, supp >  li              ] <- 1.0
-    else if (!is.finite(li) &&  is.finite(ri)) alpha[i,               supp <= ri] <- 1.0
+npmle_on_grid <- function(l, r, supp) {
+  fit <- initcomputeMLE(l, r)
+  im  <- fit$intmap
+
+  rpts <- if (nrow(im) == 2L) as.numeric(im[2, ]) else as.numeric(im[, 2])
+  pf   <- as.numeric(fit$pf)
+  p    <- numeric(length(supp))
+  keep <- which(pf > 0 & is.finite(rpts))
+  for (k in keep) {
+    j <- which.min(abs(supp - rpts[k]))
+    p[j] <- p[j] + pf[k]
   }
-  covered  <- colSums(alpha) > 0
-  if (!any(covered)) return(rep(0.0, J))
-  alpha_c  <- alpha[, covered, drop = FALSE]
-  Jc       <- sum(covered)
-  p        <- rep(1.0 / Jc, Jc)
-  for (iter in seq_len(max_iter)) {
-    p_old  <- p
-    denom  <- as.vector(alpha_c %*% p)
-    denom[denom < 1e-14] <- 1e-14
-    w      <- sweep(alpha_c * matrix(p, n, Jc, byrow = TRUE), 1, denom, "/")
-    p      <- colMeans(w)
-    if (max(abs(p - p_old)) < tol) break
+  tot <- sum(p)
+  if (tot <= 0) {
+    attr(p, "mass_beyond_support") <- 1
+    return(p)
   }
-  p_full              <- numeric(J)
-  p_full[covered]     <- p
-  p_full
+  p <- p / tot
+  attr(p, "mass_beyond_support") <- 1 - tot
+  p
 }
 
 precompute_logrank_globals <- function(l, r) {
-  n    <- length(l)
-  supp <- sort(unique(c(l[is.finite(l)], r[is.finite(r)])))
-  p_hat <- turnbull_em_npmle(l, r, supp)
+  n      <- length(l)
+  supp   <- sort(unique(c(l[is.finite(l)], r[is.finite(r)])))
+  p_hat  <- npmle_on_grid(l, r, supp)
+  m_tail <- attr(p_hat, "mass_beyond_support")
+  p_hat  <- as.numeric(p_hat)
+  if (m_tail > 1e-8) {
+    supp  <- c(supp, max(supp) + 1)
+    p_hat <- c(p_hat * (1 - m_tail), m_tail)
+  }
   active  <- p_hat > 1e-14
   supp_a  <- supp[active]
   p_hat_a <- p_hat[active] / sum(p_hat[active])
@@ -151,20 +151,19 @@ precompute_logrank_globals <- function(l, r) {
   w   <- sweep(alpha * matrix(p_hat_a, n, Ja, byrow = TRUE), 1, denom, "/")
   d_j <- colSums(w)
   n_j <- rev(cumsum(rev(d_j)))
+  ok  <- n_j > 1e-9
+  c_i <- as.vector(w %*% (ok - cumsum(ifelse(ok, d_j / n_j, 0))))
   list(supp = supp_a, p_hat = p_hat_a, alpha = alpha,
-       w = w, d_j = d_j, n_j = n_j, J = Ja, n = n)
+       w = w, d_j = d_j, n_j = n_j, c_i = c_i, J = Ja, n = n, tail_mass = m_tail)
 }
 
 screen_logrank_raw <- function(no, s, g) {
   x_k <- s[, no]
   if (sum(x_k) < 2 || sum(1 - x_k) < 2) return(0)
-  d_jk <- colSums(x_k * g$w)
-  n_jk <- rev(cumsum(rev(d_jk)))
-  ok   <- g$n_j > 1e-9
-  if (sum(ok) == 0) return(0)
-  U_n     <- sum(d_jk[ok] - g$d_j[ok] * (n_jk[ok] / g$n_j[ok])) / g$n
+  U_n     <- sum(x_k * g$c_i) / g$n
   p_hat_k <- mean(x_k)
-  abs(U_n) / (p_hat_k * (1 - p_hat_k) + 1e-8)
+
+  abs(U_n) / sqrt(p_hat_k * (1 - p_hat_k) + 1e-8)
 }
 
 int_split <- function(i,df){
@@ -254,10 +253,8 @@ Simu_Multi_Norm<-function(x_len, sd = sd, pho =pho){
   return(V)
 }
 
-
 sigma1 <- Simu_Multi_Norm(x_len = 1000, sd = 1, pho = 0.2)
 sigma2 <- Simu_Multi_Norm(x_len = 1000, sd = 1, pho = 0.5)
-sigma3 <- Simu_Multi_Norm(x_len = 1000, sd = 1, pho = 0.8)
 
 num_cores <- detectCores() - 2
 cl <- makeCluster(num_cores)
@@ -265,13 +262,13 @@ registerDoParallel(cl)
 
 clusterExport(cl, varlist = c(
   "screen_npmle1", "screen_npmle2", "screen_npmle3",
-  "turnbull_em_npmle", "precompute_logrank_globals", "screen_logrank_raw",
+  "npmle_on_grid", "precompute_logrank_globals", "screen_logrank_raw",
   "screen_ks", "screen_dc", "screen_mv", "screen_t",
   "Fk", "Fkr", "MV", "transs", "int_split",
   "initcomputeMLE", "ictest",
   "mvrnorm", "rnorm", "rpois", "rchisq", "runif",
   "rank", "quantile", "floor", "is.infinite", "is.finite",
-  "sigma1", "sigma2", "sigma3", "n_sim"
+  "sigma1", "sigma2", "n_sim"
 ))
 
 clusterEvalQ(cl, {
@@ -282,17 +279,16 @@ clusterEvalQ(cl, {
   library(dplyr)
 })
 
-
 run_simulation_parallel_glm <- function(sim_indices, pp, nn, rat, balanced = TRUE) {
   results <- foreach(kk = sim_indices, .combine = cbind, 
                      .packages = c("Icens", "interval", "MASS", "energy", "dplyr"),
                      .errorhandling = "remove") %dopar% {
-                       
+
                        set.seed(kk)
-                       
+
                        tryCatch({
                          x <- mvrnorm(nn, mu = rep(0,1000), pp)
-                         
+
                          if (balanced) {
                            s <- x > 0  
                          } else {
@@ -302,29 +298,29 @@ run_simulation_parallel_glm <- function(sim_indices, pp, nn, rat, balanced = TRU
                              s[,j] <- x[,j] > threshold
                            }
                          }
-                         
+
                          prob <- 0.2
-                         
+
                          beta = c(c(1,0.8,0.6), rep(0,15), c(-0.6,-0.8), rep(0,980))
                          lambda <- (s %*% beta)
                          y <- rpois(n=nn, exp(lambda))
-                         
+
                          l = y - rpois(n=nn, lambda=2) - 1
                          r = y + 2 * floor(rchisq(df=3, n=nn)) + 1
-                         
+
                          if (sum(r <= l) > 0) {
                            r[r <= l] <- r[r <= l] + 1
                          }
-                         
+
                          tot <- prob * nn
                          nos <- sample(1:nn, size = tot)
                          tt <- floor(rat * tot)
-                         
+
                          r[nos[1:tt]] <- Inf
                          if (tt < tot) {
                            l[nos[(tt+1):tot]] <- -Inf
                          }
-                         
+
                          transform <- function(i, l, r){
                            if (is.infinite(l[i])) { return(r[i]) }
                            else if (is.infinite(r[i])) { return(l[i]) }
@@ -340,11 +336,11 @@ run_simulation_parallel_glm <- function(sim_indices, pp, nn, rat, balanced = TRU
                            else if (is.infinite(r[i])) { return(l[i]) }
                            else { return(1/3 * l[i] + 2/3 * r[i]) }
                          }
-                         
+
                          y_mid <- sapply(1:nn, transform, l=l, r=r)
                          y_3 <- sapply(1:nn, transform2, l=l, r=r)
                          y_6 <- sapply(1:nn, transform3, l=l, r=r)
-                         
+
                          intervals <- initcomputeMLE(l, r)
                          max_tmp <- max(intervals$intmap[2,])
                          min_tmp <- min(intervals$intmap[1,])
@@ -352,88 +348,86 @@ run_simulation_parallel_glm <- function(sim_indices, pp, nn, rat, balanced = TRU
                          else { end <- max(intervals$intmap[1,]) + 1 }
                          if (is.finite(min_tmp)) { start <- min_tmp } 
                          else { start <- min(intervals$intmap[2,]) - 1 }
-                         
+
                          X1 <- start:(end-1)
                          X2 <- (start+1):end
                          basis <- cbind(X1, X2)
-                         
 
                          time_results <- numeric(13)
-                         
+
                          a1 <- Sys.time()
                          s_npmle1 <- sapply(1:1000, screen_npmle1, l=l, r=r, s=s, basis=basis)
                          time_results[1] <- as.numeric(Sys.time() - a1, units = "secs")
-                         
+
                          a2 <- Sys.time()
                          s_npmle2 <- sapply(1:1000, screen_npmle2, l=l, r=r, s=s, basis=basis)
                          time_results[2] <- as.numeric(Sys.time() - a2, units = "secs")
-                         
+
                          a3 <- Sys.time()
                          s_npmle3 <- sapply(1:1000, screen_npmle3, l=l, r=r, s=s, basis=basis)
                          time_results[3] <- as.numeric(Sys.time() - a3, units = "secs")
-                         
+
                          a_lr <- Sys.time()
                          lr_globals <- precompute_logrank_globals(l, r) 
                          s_logrank <- sapply(1:1000, screen_logrank_raw, s=s, g=lr_globals) 
                          time_results[4] <- as.numeric(Sys.time() - a_lr, units = "secs")
-                         
+
                          a4 <- Sys.time()
                          s_ks <- sapply(1:1000, screen_ks, y_mid=y_mid, s=s)
                          time_results[5] <- as.numeric(Sys.time() - a4, units = "secs")
-                         
+
                          a5 <- Sys.time()
                          s_dc <- sapply(1:1000, screen_dc, y_mid=y_mid, s=s)
                          time_results[6] <- as.numeric(Sys.time() - a5, units = "secs")
-                         
+
                          a6 <- Sys.time()
                          s_mv <- sapply(1:1000, screen_mv, y_mid=y_mid, s=s)
                          time_results[7] <- as.numeric(Sys.time() - a6, units = "secs")
-                         
+
                          a7 <- Sys.time()
                          s_ks3 <- sapply(1:1000, screen_ks, y_mid=y_3, s=s)
                          time_results[8] <- as.numeric(Sys.time() - a7, units = "secs")
-                         
+
                          a8 <- Sys.time()
                          s_dc3 <- sapply(1:1000, screen_dc, y_mid=y_3, s=s)
                          time_results[9] <- as.numeric(Sys.time() - a8, units = "secs")
-                         
+
                          a9 <- Sys.time()
                          s_mv3 <- sapply(1:1000, screen_mv, y_mid=y_3, s=s)
                          time_results[10] <- as.numeric(Sys.time() - a9, units = "secs")
-                         
+
                          a10 <- Sys.time()
                          s_ks6 <- sapply(1:1000, screen_ks, y_mid=y_6, s=s)
                          time_results[11] <- as.numeric(Sys.time() - a10, units = "secs")
-                         
+
                          a11 <- Sys.time()
                          s_dc6 <- sapply(1:1000, screen_dc, y_mid=y_6, s=s)
                          time_results[12] <- as.numeric(Sys.time() - a11, units = "secs")
-                         
+
                          a12 <- Sys.time()
                          s_mv6 <- sapply(1:1000, screen_mv, y_mid=y_6, s=s)
                          time_results[13] <- as.numeric(Sys.time() - a12, units = "secs")
-                         
-                         
+
                          a <- (1001 - rank(s_npmle1))[c(1,2,3,19,20)]
                          b <- (1001 - rank(s_npmle2))[c(1,2,3,19,20)]
                          c <- (1001 - rank(s_npmle3))[c(1,2,3,19,20)]
-                         
+
                          lr_rank <- (1001 - rank(s_logrank))[c(1,2,3,19,20)]
-                         
+
                          d <- (1001 - rank(s_ks))[c(1,2,3,19,20)]
                          e <- (1001 - rank(s_dc))[c(1,2,3,19,20)]
                          f <- (1001 - rank(s_mv))[c(1,2,3,19,20)]
-                         
+
                          d3 <- (1001 - rank(s_ks3))[c(1,2,3,19,20)]
                          e3 <- (1001 - rank(s_dc3))[c(1,2,3,19,20)]
                          f3 <- (1001 - rank(s_mv3))[c(1,2,3,19,20)]
-                         
+
                          d6 <- (1001 - rank(s_ks6))[c(1,2,3,19,20)]
                          e6 <- (1001 - rank(s_dc6))[c(1,2,3,19,20)]
                          f6 <- (1001 - rank(s_mv6))[c(1,2,3,19,20)]
-                         
+
                          return(c(a, b, c, lr_rank, d, e, f, d3, e3, f3, d6, e6, f6, time_results))
-                         
+
                        }, error = function(e) {
                          warning(paste("Simulation", kk, "failed:", e$message))
                          return(rep(NA, 78)) 
@@ -442,38 +436,29 @@ run_simulation_parallel_glm <- function(sim_indices, pp, nn, rat, balanced = TRU
   return(results)
 }
 
-
 cat("Running GLM parallel simulations...\n")
 cat("Replications:", n_sim, "\n")
 cat("Cores used:", num_cores, "\n")
 
 res1  <- run_simulation_parallel_glm(1:n_sim, pp=sigma1, nn=200, rat=0.3, balanced=TRUE)
 res2  <- run_simulation_parallel_glm(1:n_sim, pp=sigma2, nn=200, rat=0.3, balanced=TRUE)
-res3  <- run_simulation_parallel_glm(1:n_sim, pp=sigma3, nn=200, rat=0.3, balanced=TRUE)
 res4  <- run_simulation_parallel_glm(1:n_sim, pp=sigma1, nn=200, rat=0.7, balanced=TRUE)
 res5  <- run_simulation_parallel_glm(1:n_sim, pp=sigma2, nn=200, rat=0.7, balanced=TRUE)
-res6  <- run_simulation_parallel_glm(1:n_sim, pp=sigma3, nn=200, rat=0.7, balanced=TRUE)
 res7  <- run_simulation_parallel_glm(1:n_sim, pp=sigma1, nn=200, rat=0.3, balanced=FALSE)
 res8  <- run_simulation_parallel_glm(1:n_sim, pp=sigma2, nn=200, rat=0.3, balanced=FALSE)
-res9  <- run_simulation_parallel_glm(1:n_sim, pp=sigma3, nn=200, rat=0.3, balanced=FALSE)
 res10 <- run_simulation_parallel_glm(1:n_sim, pp=sigma1, nn=200, rat=0.7, balanced=FALSE)
 res11 <- run_simulation_parallel_glm(1:n_sim, pp=sigma2, nn=200, rat=0.7, balanced=FALSE)
-res12 <- run_simulation_parallel_glm(1:n_sim, pp=sigma3, nn=200, rat=0.7, balanced=FALSE)
 
 stopCluster(cl)
 
 write.csv(res1,  file.path(output_dir, "Full_res1_Time_LR.csv"))
 write.csv(res2,  file.path(output_dir, "Full_res2_Time_LR.csv"))
-write.csv(res3,  file.path(output_dir, "Full_res3_Time_LR.csv"))
 write.csv(res4,  file.path(output_dir, "Full_res4_Time_LR.csv"))
 write.csv(res5,  file.path(output_dir, "Full_res5_Time_LR.csv"))
-write.csv(res6,  file.path(output_dir, "Full_res6_Time_LR.csv"))
 write.csv(res7,  file.path(output_dir, "Full_res7_Time_LR.csv"))
 write.csv(res8,  file.path(output_dir, "Full_res8_Time_LR.csv"))
-write.csv(res9,  file.path(output_dir, "Full_res9_Time_LR.csv"))
 write.csv(res10, file.path(output_dir, "Full_res10_Time_LR.csv"))
 write.csv(res11, file.path(output_dir, "Full_res11_Time_LR.csv"))
-write.csv(res12, file.path(output_dir, "Full_res12_Time_LR.csv"))
 
 cat("All GLM simulations complete. Results saved to:", output_dir, "\n")
 
@@ -532,4 +517,3 @@ list_05 <- list(c1_b = res2, c1_u = res8,  c2_b = res5, c2_u = res11)
 
 glm_table <- generate_glm_table(list_02, list_05)
 print(glm_table, row.names = FALSE)
-
